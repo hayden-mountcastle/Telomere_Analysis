@@ -1,0 +1,2188 @@
+---
+title: "Telomere Exploration"
+author: "Hayden Mountcastle and Andrew Ratanatharathorn"
+date: "November 3rd, 2023"
+output:
+  pdf_document: 
+    latex_engine: xelatex
+  html_document:
+    df_print: paged
+  word_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+# update.packages(ask = FALSE, checkBuilt = TRUE)
+# tinytex::tlmgr_update()
+
+```
+# Contents
+
+## Analyses
+
+
+**Purpose:**
+
+This is an exploratory analysis of 971 participants, 487 cases with 
+Schizophrenia and 484 controls, with telomere and phenotype data from NGAP 
+Pyschosis. The original sample has 1000 participants, 
+evenly split between cases and controls,
+but 29 participants were not included in the analysis due to 
+insufficient DNA or failed samples, leaving a total of n=971 participants. 
+
+Here, we explore associations between Telomere length and Schizophrenia, 
+age, and sex.  
+We also explore other associations on available phenotypic data. 
+
+**Methods:**
+
+We viewed association between phenotype variables with sufficient prevalence
+with log telomere length (*ltl*). We used linear regression to view associations
+between said variables and *ltl* at first without adjusting for age, and then 
+adjusting for age. Additionally, we ran an ANOVA test with models with and without
+interaction terms to determine whether there was any functional 
+difference between these models. 
+
+**Results**
+
+In the unadjusted model, case status (*is_case*), sex (*msex*), 
+and educational attainment (*educ_ord*) were associated with *ltl* (p<0.05). 
+
+Of particular note, congruent with previous literature, men on average had shorter
+telomere lengthboth adjusting and not adjusting for age 
+(T-test, p = 0.0018). 
+
+In the adjusted linear regression model, controlling for age and sex, 
+schizophrenia (*is_case*=1) is associated with LTL (p=0.016)
+
+
+# Data
+
+**Libraries**
+
+```{r error=FALSE, message=FALSE, warning=FALSE, results='hide'}
+library(tidyverse)
+library(knitr)
+library(batchtma)
+library(ggplot2)
+library(stargazer)
+library(tableone)
+library(arsenal)
+library(ggpubr)
+library(rstatix)
+library(broom)
+library(ggrepel)
+library(knitr)
+library(kableExtra)
+library(gtsummary)
+library(table1)
+library(flextable)
+library(janitor)
+library(table1)
+library(ggeasy)
+library(rcompanion)
+```
+
+**Data specifics**
+
+* I was sent the data specified in *tel_data* from Steven Senese 
+<ssenese@hsph.harvard.edu> on 09-26-2023. This data includes the telomere 
+lengths. This is a modified version of the *Koenen Sorted Data*, that included
+5 sets of data based on the plates run for telomere analysis. I copied those
+into one document, *tel_data*, but specified in column Set which plate it came
+from. 
+
+* I was sent the data specified in *manifest* from Patrice Soule 
+<spsoule@hsph.harvard.edu> on 10-16-2023. 
+  
+* The data specified in *freeze* is from the latest data freeze file located 
+in DropBox NeuroGAP Psychosis called *NeuroGAP-P_Release8_Kenya_as-of-2023-08-29* 
+
+
+
+**Loading and merging data**
+
+```{r, warning=FALSE}
+#Adjust to fit your computer
+
+path_analytic <- "/Users/ham593/Dropbox (Harvard University)/NeuroGAP-Psychosis/Telomeres/Data/Analytical_data"
+path_raw <- "/Users/ham593/Dropbox (Harvard University)/NeuroGAP-Psychosis/Telomeres/Data/Raw Data"
+
+
+#Load in data-------
+#Analytical Data
+setwd(path_analytic)
+tel_data <- read.csv('Telomeredata_new.csv')
+freeze <- read.csv('Copy of NeuroGAP_DataFreeze8.csv')
+
+#Raw Data
+setwd(path_raw)
+manifest <- read.csv('Full manifest Broad PDO-31674 Plate Map.csv')
+
+colnames(manifest)[colnames(manifest) == "Collaborator.Participant.ID"] <- "subjid"
+colnames(freeze)[colnames(freeze) == "subj_id"] <- "subjid"
+
+#Remove all Reference/QC rows and Insufficient DNA
+tel_data <- tel_data[grepl("^SM-", tel_data$Sample.ID), ]
+tel_data <- tel_data[!grepl("Failed", tel_data$Tel.CT.1),]
+tel_data <- tel_data[!grepl("Insufficient DNA", tel_data$Tel.CT.1),]
+
+#MERGE
+tel_all <- merge(manifest, tel_data, by="Sample.ID")
+tel_all <- merge(tel_all, freeze, by="subjid")
+
+#We found that Age was duplicated, the below will remove on of the Age variables. 
+#Remove duplicated columns
+tel_all <- tel_all %>% 
+  subset(select=which(!duplicated(names(.))))
+```
+
+
+```{r, include=F}
+#Figuring out which samples did not match. 
+#**There is no missing data.
+
+#missing_id <- as.data.frame(setdiff(manifest$Sample.ID, tel_data$Sample.ID))
+
+# missing_id <- merge(manifest, missing_id, by="Sample.ID") 
+            #missing IDs present in manifest, but not in tel_data
+
+#Delete all irrelevant columns
+# missing_id <- missing_id %>% select(subjid, Sample.ID) 
+# missing_id <- missing_id[-c(1, 2), ] #formatting, delete first two empty rows
+
+#formatting, reset rownames.
+# rownames(missing_id) <- 1:nrow(missing_id)  
+
+#save csv
+# #write.csv(missing_id, file = "missing_id_telomere.csv", row.names = FALSE) #save csv
+
+```
+
+
+
+
+```{r, include = FALSE, results=F}
+sumTab<-function(x, margin=NULL){
+  tab<-table(x, useNA="always")
+  prop<-round(prop.table(tab, margin=margin)*100,1)
+  dat<-paste(tab, " (", prop, "%)", sep="")
+  names(dat)<-names(tab)
+  return(dat)
+}
+
+crossTab<-function(x, y, margin=1){
+  tab<-table(x, y, useNA="always")
+  prop<-round(prop.table(tab, margin=margin)*100,1)
+  dat<-matrix(paste(tab, " (", prop, "%)", sep=""), 
+              nrow=length(levels(x)), ncol=length(levels(y)))
+  rownames(dat)<-levels(x)
+  colnames(dat)<-levels(y)
+  return(dat)
+}
+
+
+#Function to count if any variables have mismatches
+
+count_mismatch <- function(df, var1, var2) {
+  counter <- 0
+  mismatch <- c()
+  
+  for (i in 1:nrow(df)) {
+      if (df[i, var1] != df[i, var2]) {
+          counter <- counter + 1
+          mismatch <- c(mismatch, df[i,"subjid"])
+      }
+  }
+    if (counter==0) {
+        print(paste("There are no mismatches for", var1))
+  }
+    else {
+        print(paste("There are",counter,"mismatches for", var1))
+        print(mismatch)
+     }
+}
+
+```
+
+
+```{r, include=FALSE}
+
+#Age
+count_mismatch(tel_all, "Age", "age_at_iview")
+
+#Country
+tel_all$study_country[which(tel_all$study_country==4)]<-"Ethiopia"
+count_mismatch(tel_all, "Country", "study_country")
+
+#Gender
+tel_all$msex[which(tel_all$msex==1)]<-"Male"
+tel_all$msex[which(tel_all$msex==0)]<-"Female"
+count_mismatch(tel_all, "Gender", "msex")
+
+#Case/Control 
+tel_all$case_control <- ifelse((tel_all$Primary.Disease == "Schizophrenia"
+                                    ),1,0)
+
+count_mismatch(tel_all, "case_control", "is_case")
+
+# 3 mismatches
+# "AAP82555075" "AAP86157733" "AAP91971910"
+
+
+
+#Remove these participants from the data
+#subjid_to_remove <- c("AAP82555075", "AAP86157733", "AAP91971910")
+#tel_all <- tel_all[!tel_all$subjid %in% subjid_to_remove, ]
+
+
+#Set case_control equal to is_case
+tel_all$case_control <- tel_all$is_case
+
+```
+
+\pagebreak
+
+
+```{r, include = FALSE}
+
+tel_all$is_case<-factor(tel_all$is_case, levels=c(0, 1))
+tab<-sumTab(tel_all$is_case)
+names(tab)[which(is.na(names(tab)))]<-"Missing"
+
+kable(tab, booktabs = TRUE, longtable = TRUE,
+  caption = "Distribution of cases and controls") %>%
+  kable_styling(latex_options = c("hold_position", "repeat_header"))
+
+
+#kable(tab, caption="Prevalence of cases", col.names = NULL)
+```
+
+
+
+```{r, include = F}
+#age.   
+#all patients are between age 25-52
+tab<-summary(tel_all$age_at_iview)
+tab<-cbind(names(tab),round(matrix(tab),1))
+colnames(tab)<-c("parameter", "value")
+
+kable(tab, booktabs = TRUE, longtable = TRUE,
+  caption = "Distribution of age at interview") %>%
+  kable_styling(latex_options = c("hold_position", "repeat_header"))
+
+#kable(tab, caption="Distribution of age at interview")
+
+ggplot(tel_all, aes(x=age_at_iview))+
+  geom_histogram(binwidth = 2, position="dodge")
+
+ggplot(tel_all, aes(x=age_at_iview, fill=is_case))+
+  geom_histogram(binwidth = 2, position="dodge") +
+  xlim(20,60) +
+  xlab("Age") + ylab("Count") + 
+  ggtitle("Age Distribution of Cases and Controls") +
+  ggeasy::easy_center_title() +
+  labs(fill='Case Status')
+
+
+
+ggplot(tel_all, aes(x=age_at_iview, fill=is_case))+
+  geom_histogram(binwidth = 2, position="dodge") +
+  xlab("Age") + ylab("Count") + 
+  ggtitle("Age Distribution of Cases and Controls") +
+  ggeasy::easy_center_title() +
+  labs(fill='Case Status')  +
+  scale_y_continuous(labels = scales::percent_format(scale = 1)) 
+
+
+
+
+ggplot(tel_all, aes(x=age_at_iview, fill=is_case))+
+  facet_wrap(~msex) + 
+  geom_bar(aes(y = (..count..)/sum(..count..)*100), position="dodge") +
+  xlab("Age") + ylab("Percent") + 
+  ggtitle("Age Distribution of Cases and Controls") +
+  ggeasy::easy_center_title() +
+  labs(fill='Case Status') +
+  scale_y_continuous(labels = scales::percent_format(scale = 1))
+```
+
+
+\pagebreak
+
+**Distribution of age among cases and controls**
+
+```{r, include = T}
+
+
+ggplot(tel_all, aes(x=age_at_iview, group = is_case, fill=is_case))+
+  facet_wrap(~msex) + 
+  geom_density(alpha=0.4) +
+  xlab("Age") + ylab("Density") + 
+  ggtitle("Age Distribution of Cases and Controls") +
+  ggeasy::easy_center_title() +
+  labs(fill='Case Status') +
+  #scale_y_continuous(labels = scales::percent_format(scale = 1)) +
+  theme_bw()  +
+  scale_fill_discrete(name = "Case Status", labels = c("Control", "Case"))
+
+
+
+
+
+```
+
+
+
+
+```{r, include = FALSE}
+
+#sex
+tel_all$msex[which(tel_all$msex==1)]<-"Male"
+tel_all$msex[which(tel_all$msex==0)]<-"Female"
+tel_all$msex<-factor(tel_all$msex, levels=c("Female", "Male"))
+tab<-sumTab(tel_all$msex)
+names(tab)[which(is.na(names(tab)))]<-"Missing"
+
+kable(tab, booktabs = TRUE, longtable = TRUE,
+  caption = "Distribution of sex") %>%
+  kable_styling(latex_options = c("hold_position", "repeat_header"))
+
+
+tel_all$msex <- relevel(tel_all$msex, ref = "Male")
+
+
+tab <- tel_all %>% group_by(msex, is_case) %>%
+  summarize(Count=n()) %>% 
+  pivot_wider(names_from = msex, 
+              values_from = Count) %>%
+  adorn_totals(where=c("row", "col")) 
+
+col_names <- c("Case Status", "Male", "Female", "Total") 
+ft <- flextable(tab)
+ft <- theme_vanilla(ft)
+ft <- set_header_labels(ft, values = col_names)
+ft <- set_caption(ft, caption = "Sex by Case Status")
+ft
+
+
+tel_all %>% filter(msex=="Female") %>% nrow()
+
+```
+
+
+
+```{r, include = FALSE}
+
+
+
+tel_all$education[tel_all$education==1]<-"No education"
+tel_all$education[tel_all$education==2]<-"Some primary school"
+tel_all$education[tel_all$education==3]<-"Finished primary school"
+tel_all$education[tel_all$education==4]<-"Some secondary school"
+tel_all$education[tel_all$education==5]<-"Finished secondary school"
+tel_all$education[tel_all$education==6]<-"Some college"
+tel_all$education[tel_all$education==7]<-"Finished college"
+tel_all$education<-factor(tel_all$education, levels=c("No education", 
+                                                  "Some primary school", 
+                                                  "Finished primary school",
+                                                  "Some secondary school",
+                                                  "Finished secondary school",
+                                                  "Some college", 
+                                                  "Finished college"))
+
+
+tel_all$education <- relevel(tel_all$education, ref = "No education")
+
+
+
+tab<-sumTab(tel_all$education)
+
+names(tab)[which(is.na(names(tab)))]<-"Missing"
+
+kable(tab, booktabs = TRUE, longtable = TRUE,
+  caption = "Participant's reported education levels") %>%
+  kable_styling(latex_options = c("hold_position", "repeat_header"))
+
+#kable(tab, caption="Participant's reported education levels", col.names = NULL)
+
+ggplot(tel_all, aes(x=education, fill=is_case)) + 
+  geom_bar(position="dodge") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+
+
+```{r, include = FALSE}
+
+
+tel_all$educ_ord<-NA
+primary<-c("No education", "Some primary school", "Finished primary school")
+tel_all[which(tel_all$education%in%primary), "educ_ord"]<-"Primary or less"
+secondary<-c("Some secondary school", "Finished secondary school")
+tel_all[which(tel_all$education%in%secondary), "educ_ord"]<-"Secondary"
+college<-c("Some college", "Finished college")
+tel_all[which(tel_all$education%in%college), "educ_ord"]<-"College"
+tel_all$educ_ord<-factor(tel_all$educ_ord, levels=c("Primary or less",
+                                                            "Secondary", 
+                                                            "College"))
+
+tel_all$educ_ord <- relevel(tel_all$educ_ord, ref = "Primary or less")
+
+tab<-sumTab(tel_all$educ_ord)
+names(tab)[which(is.na(names(tab)))]<-"Missing"
+
+kable(tab, booktabs = TRUE, longtable = TRUE,
+  caption = "Participant's reported education levels") %>%
+  kable_styling(latex_options = c("hold_position", "repeat_header"))
+
+
+#kable(tab, caption="Participant's reported education levels", col.names = NULL)
+
+
+```
+
+```{r, include=FALSE}
+
+
+tel_all$psychosis_primary[which(tel_all$psychosis_primary==2)]<-"Bipolar"
+tel_all$psychosis_primary[which(tel_all$psychosis_primary==7)]<-
+  "Psychotic Disorder NOS"
+tel_all$psychosis_primary[which(tel_all$psychosis_primary==8)]<-"Schizophrenia"
+tel_all$psychosis_primary[which(tel_all$psychosis_primary==11)]<-
+  "Schizoaffective Disorder"
+tel_all$psychosis_primary<-factor(tel_all$psychosis_primary, 
+                                levels=c("Bipolar", "Psychotic Disorder NOS",
+                                         "Schizophrenia", 
+                                         "Schizoaffective Disorder"))
+
+
+tel_all <- tel_all %>%
+  mutate(schizophrenia = factor(ifelse(is.na(psychosis_primary), 0, 
+                                  ifelse(psychosis_primary == "Schizophrenia",
+                                             1, 0))))
+
+tab<-sumTab(tel_all$psychosis_primary)
+
+names(tab)[which(is.na(names(tab)))]<-"Missing"
+
+kable(tab, booktabs = TRUE, longtable = TRUE,
+  caption = "Participant's primary psychosis diagnosis") %>%
+  kable_styling(latex_options = c("hold_position", "repeat_header"))
+
+
+#kable(tab, caption="Participant's primary psychosis diagnosis", 
+      #col.names = NULL)
+
+
+
+
+
+```
+
+
+
+```{r, include= FALSE}
+#3cat
+
+
+tel_all <- tel_all %>%
+  mutate(khat_3cat = case_when(
+    assist_khat==0 ~ "Never Users",
+    assist_khat==1 & assist_khat_amt %in% c(1,2,3) ~ "Irregular Users",
+    assist_khat == 1 & assist_khat_amt %in% c(4,5) ~ "Regular Users",
+    TRUE ~ NA_character_
+  ))
+
+
+tel_all$khat_3cat <-as.factor(tel_all$khat_3cat )
+tel_all$khat_3cat <- relevel(tel_all$khat_3cat, ref = "Never Users")
+
+tab<-sumTab(tel_all$khat_3cat)
+names(tab)[which(is.na(names(tab)))]<-"Missing"
+
+kable(tab, booktabs = TRUE, longtable = TRUE,
+  caption = "Participants reported Khat use") %>%
+  kable_styling(latex_options = c("hold_position", "repeat_header"))
+
+
+
+#Ever
+tel_all$assist_khat<-factor(tel_all$assist_khat, levels=c(0, 1))
+tab<-sumTab(tel_all$assist_khat)
+names(tab)[which(is.na(names(tab)))]<-"Missing"
+
+#kable(tab, caption="Participants reporting amount of Khat use", 
+#      col.names = NULL)
+
+#In the past three months 
+
+tel_all$assist_khat_amt[which(tel_all$assist_khat_amt==1)]<-"None"
+tel_all$assist_khat_amt[which(tel_all$assist_khat_amt==2)]<-"Once or twice"
+tel_all$assist_khat_amt[which(tel_all$assist_khat_amt==3)]<-"Monthly"
+tel_all$assist_khat_amt[which(tel_all$assist_khat_amt==4)]<-"Weekly"
+tel_all$assist_khat_amt[which(tel_all$assist_khat_amt==5)]<-"Daily"
+tel_all$assist_khat_amt<-factor(tel_all$assist_khat_amt, 
+                                 levels=c("None", "Once or twice", "Monthly",
+                                           "Weekly", "Daily"))
+
+
+
+
+# kable(tab, caption="Participants reported Khat use",
+#       col.names = NULL)
+
+
+
+```
+
+```{r, include=FALSE}
+
+#3cat
+
+tel_all <- tel_all %>%
+  mutate(alcohol_3cat = case_when(
+    assist_alcohol==0 ~ "Never Users",
+    assist_alcohol==1 & assist_alcohol_amt %in% c(1,2,3) ~ "Irregular Users",
+    assist_alcohol == 1 & assist_alcohol_amt %in% c(4,5) ~ "Regular Users",
+    TRUE ~ NA_character_
+  ))
+
+tel_all$alcohol_3cat <-as.factor(tel_all$alcohol_3cat )
+tel_all$alcohol_3cat <- relevel(tel_all$alcohol_3cat, ref = "Never Users")
+
+tab<-sumTab(tel_all$alcohol_3cat)
+names(tab)[which(is.na(names(tab)))]<-"Missing"
+
+kable(tab, booktabs = TRUE, longtable = TRUE,
+  caption = "Participants reported alcohol use") %>%
+  kable_styling(latex_options = c("hold_position", "repeat_header"))
+
+
+
+
+tel_all$assist_alcohol<-factor(tel_all$assist_alcohol, levels=c(0,1))
+tab<-sumTab(tel_all$assist_alcohol)
+names(tab)[which(is.na(names(tab)))]<-"Missing"
+
+kable(tab, booktabs = TRUE, longtable = TRUE,
+  caption = "Participants reported alcohol use") %>%
+  kable_styling(latex_options = c("hold_position", "repeat_header"))
+
+
+
+#kable(tab, caption="Participants reporting alcohol use", col.names = NULL)
+
+
+                                                                                                                                                                                                                                                                                                                                     
+
+
+
+
+```
+
+```{r, include=FALSE}
+
+#3 cat
+
+tel_all <- tel_all %>%
+  mutate(tobacco_3cat = case_when(
+    assist_tobacco==0 ~ "Never Users",
+    assist_tobacco==1 & assist_tobacco_amt %in% c(1,2,3) ~ "Irregular Users",
+    assist_tobacco == 1 & assist_tobacco_amt %in% c(4,5) ~ "Regular Users",
+    TRUE ~ NA_character_
+  ))
+
+tel_all$tobacco_3cat <-as.factor(tel_all$tobacco_3cat )
+tel_all$tobacco_3cat <- relevel(tel_all$tobacco_3cat, ref = "Never Users")
+
+tab<-sumTab(tel_all$tobacco_3cat)
+names(tab)[which(is.na(names(tab)))]<-"Missing"
+
+kable(tab, booktabs = TRUE, longtable = TRUE,
+  caption = "Participants reported tobacco use") %>%
+  kable_styling(latex_options = c("hold_position", "repeat_header"))
+
+
+
+tel_all$assist_tobacco<-factor(tel_all$assist_tobacco, levels=c(0, 1))
+
+
+#kable(tab, caption="Participants reporting tobacco use", col.names = NULL)
+
+
+tel_all$assist_tobacco_amt[which(tel_all$assist_tobacco_amt==1)]<-"None"
+tel_all$assist_tobacco_amt[which(tel_all$assist_tobacco_amt==2)]<-"Once or twice"
+tel_all$assist_tobacco_amt[which(tel_all$assist_tobacco_amt==3)]<-"Monthly"
+tel_all$assist_tobacco_amt[which(tel_all$assist_tobacco_amt==4)]<-"Weekly"
+tel_all$assist_tobacco_amt[which(tel_all$assist_tobacco_amt==5)]<-"Daily"
+tel_all$assist_tobacco_amt<-factor(tel_all$assist_tobacco_amt, 
+                                 levels=c("None", "Once or twice", "Monthly",
+                                          "Weekly", "Daily"))
+
+tab<-sumTab(tel_all$assist_tobacco_amt)
+names(tab)[which(is.na(names(tab)))]<-"Missing"
+
+# kable(tab, booktabs = TRUE, longtable = TRUE,
+#   caption = "Participants reported tobacco use") %>%
+#   kable_styling(latex_options = c("hold_position", "repeat_header"))
+# 
+# 
+# kable(tab, caption="Participants reporting Tobacco use", col.names = NULL)
+
+
+
+
+```
+
+
+```{r, include=FALSE}
+
+tel_all <- tel_all %>%
+  mutate(cannabis_3cat = case_when(
+    assist_cannabis==0 ~ "Never Users" ,
+    assist_cannabis==1 & assist_cannabis_amt %in% c(1,2,3) ~ "Irregular Users",
+    assist_cannabis == 1 & assist_cannabis_amt %in% c(4,5) ~ "Regular Users",
+    TRUE ~ NA_character_
+  ))
+
+tel_all$cannabis_3cat <-as.factor(tel_all$cannabis_3cat )
+tel_all$cannabis_3cat <- relevel(tel_all$cannabis_3cat, ref = "Never Users")
+
+tab<-sumTab(tel_all$cannabis_3cat)
+names(tab)[which(is.na(names(tab)))]<-"Missing"
+
+kable(tab, booktabs = TRUE, longtable = TRUE,
+  caption = "Participants reported cannabis use") %>%
+  kable_styling(latex_options = c("hold_position", "repeat_header"))
+
+
+
+tel_all$assist_cannabis<-factor(tel_all$assist_cannabis, levels=c(0, 1))
+
+
+
+#kable(tab, caption="Participants reporting  use", col.names = NULL)
+
+
+tel_all$assist_cannabis_amt[which(tel_all$assist_cannabis_amt==1)]<-"None"
+tel_all$assist_cannabis_amt[which(tel_all$assist_cannabis_amt==2)]<-"Once or twice"
+tel_all$assist_cannabis_amt[which(tel_all$assist_cannabis_amt==3)]<-"Monthly"
+tel_all$assist_cannabis_amt[which(tel_all$assist_cannabis_amt==4)]<-"Weekly"
+tel_all$assist_cannabis_amt[which(tel_all$assist_cannabis_amt==5)]<-"Daily"
+tel_all$assist_cannabis_amt<-factor(tel_all$assist_cannabis_amt, 
+                                 levels=c("None", "Once or twice", "Monthly",
+                                          "Weekly", "Daily"))
+
+# tab<-sumTab(tel_all$assist_cannabis_amt)
+# names(tab)[which(is.na(names(tab)))]<-"Missing"
+# kable(tab, caption="Participants reporting Tobacco use", col.names = NULL)
+
+
+
+
+
+
+```
+
+
+
+```{r, include=FALSE}
+
+
+tel_all$hbp<-0
+tel_all[which(tel_all$bp_over<=90 | tel_all$bp_under<=60), 
+            "hbp"]<-"Low BP"
+tel_all[which(tel_all$bp_over>=140 | tel_all$bp_under>=90), 
+            "hbp"]<-"High BP"
+tel_all[which((tel_all$bp_over > 90 & tel_all$bp_over < 140) | 
+                  (tel_all$bp_under > 60 & tel_all$bp_under <= 90)), 
+             "hbp"] <- "Normal BP"
+
+
+tel_all$hbp <- factor(tel_all$hbp, levels = c("Normal BP", 
+                                              "Low BP", "High BP"))
+
+tel_all$hbp <- relevel(tel_all$hbp, ref = "Normal BP")
+
+
+tab<-sumTab(tel_all$hbp)
+names(tab)[which(is.na(names(tab)))]<-"Missing"
+
+
+
+kable(tab, booktabs = TRUE, longtable = TRUE,
+  caption = "Participants categorized as having high blood 
+      pressure based on having a systolic blood pressure over 140 
+      or diastolic over 90") %>%
+  kable_styling(latex_options = c("hold_position", "repeat_header"))
+
+
+# kable(tab, caption="Participants categorized as having high blood 
+#       pressure based on having a systolic blood pressure over 140 
+#       or diastolic over 90", col.names = NULL)
+
+tel_all$cidi_q9<-factor(tel_all$cidi_q9, levels=c(0, 1))
+tab<-sumTab(tel_all$cidi_q9)
+names(tab)[which(is.na(names(tab)))]<-"Missing"
+
+#kable(tab, caption="Participants with high blood pressure", col.names = NULL)
+
+```
+
+
+```{r, include=FALSE}
+
+tel_all$cidi_q13<-factor(tel_all$cidi_q13, levels=c(0, 1))
+tab<-sumTab(tel_all$cidi_q13)
+names(tab)[which(is.na(names(tab)))]<-"Missing"
+
+kable(tab, booktabs = TRUE, longtable = TRUE,
+  caption = "Participants with diabetes or high blood sugar") %>%
+  kable_styling(latex_options = c("hold_position", "repeat_header"))
+
+
+# kable(tab, caption="Participants with diabetes or high blood sugar", 
+#       col.names = NULL)
+
+
+```
+
+
+
+
+
+```{r, include=FALSE}
+
+# tab<-summary(tel_all$heart_bpm)
+# tab<-cbind(names(tab),round(matrix(tab),1))
+# colnames(tab)<-c("Parameter", "Value")
+# kable(tab, caption="Distribution of heart rate")
+
+
+ggplot(tel_all, aes(x=heart_bpm))+
+ geom_histogram(binwidth = 5) +
+ theme_bw()
+
+#Creating categories for heart rate
+
+tel_all$bpm_bin<-0
+tel_all[which(tel_all$heart_bpm<=100 & tel_all$heart_bpm>=60),
+            "bpm_bin"]<-"Normal Heartrate"
+tel_all[which(tel_all$heart_bpm<60), "bpm_bin"]<-"Slow Heartrate"
+tel_all[which(tel_all$heart_bpm >100), "bpm_bin"] <- "Fast Heartrate"
+tel_all[which(is.na(tel_all$heart_bpm)), "bpm_bin"] <- NA
+
+
+tel_all$bpm_bin<-factor(tel_all$bpm_bin, levels=c("Normal Heartrate", 
+                                                      "Slow Heartrate", 
+                                                      "Fast Heartrate"))
+tel_all$bpm_bin <- relevel(tel_all$bpm_bin, ref = "Normal Heartrate")
+
+
+
+tab<-sumTab(tel_all$bpm_bin)
+names(tab)[which(is.na(names(tab)))]<-"Missing"
+
+
+kable(tab, booktabs = TRUE, longtable = TRUE,
+  caption = "Participants Heartrate") %>%
+  kable_styling(latex_options = c("hold_position", "repeat_header"))
+
+#kable(tab, caption="Participants Heartrate", col.names = NULL)
+
+
+
+```
+
+
+```{r, include=FALSE}
+
+tab<-summary(tel_all$bmi)
+tab<-cbind(names(tab),round(matrix(tab),1))
+colnames(tab)<-c("parameter", "value")
+#kable(tab, caption="Distribution of bmi")
+
+ggplot(tel_all, aes(x=bmi))+geom_histogram(binwidth = 1)
+
+tel_all$obese<-NA
+tel_all[which(tel_all$bmi<30), "obese"]<-0
+tel_all[which(tel_all$bmi>=30), "obese"]<-1
+tel_all$obese<-factor(tel_all$obese, levels=c(0, 1))
+tab<-sumTab(tel_all$obese)
+names(tab)[which(is.na(names(tab)))]<-"Missing"
+#kable(tab, caption="Participants with bmi >30", col.names = NULL)
+
+
+
+
+tel_all$bmi_bin<-0
+tel_all[which(tel_all$bmi<=18.5), "bmi_bin"]<-"Underweight"
+tel_all[which(tel_all$bmi>18.5 & tel_all$bmi<=24.9), 
+            "bmi_bin"] <-"Normal Weight"
+tel_all[which(tel_all$bmi>24.9 & tel_all$bmi<30), 
+            "bmi_bin"] <- "Overweight"
+tel_all[which(tel_all$bmi>=30), 
+            "bmi_bin"] <- "Obese"
+tel_all[which(is.na(tel_all$bmi)), "bmi_bin"] <- NA
+
+
+tel_all$bmi_bin<-factor(tel_all$bmi_bin, levels=c("Normal Weight", 
+                                           "Underweight",
+                                           "Overweight",
+                                           "Obese"
+                                         ))
+tel_all$bmi_bin <- relevel(tel_all$bmi_bin, ref = "Normal Weight")
+
+
+
+tab<-sumTab(tel_all$bmi_bin)
+names(tab)[which(is.na(names(tab)))]<-"Missing"
+
+kable(tab, booktabs = TRUE, longtable = TRUE,
+  caption = "Participants Body Mass Index") %>%
+  kable_styling(latex_options = c("hold_position", "repeat_header"))
+
+
+#kable(tab, caption="Participant Body Mass Index", col.names = NULL)
+
+
+
+
+```
+
+
+
+```{r, include=FALSE}
+
+tel_all$age_group <- cut(tel_all$age_at_iview, breaks = c(0, 30, 40, 50, 
+                        max(tel_all$age_at_iview)), 
+                        labels = c("0-30", "31-40", "41-50", "51-60"))
+
+
+tab<-sumTab(tel_all$age_group)
+names(tab)[which(is.na(names(tab)))]<-"Missing"
+
+kable(tab, booktabs = TRUE, longtable = TRUE,
+  caption = "Participant Age Groups") %>%
+  kable_styling(latex_options = c("hold_position", "repeat_header"))
+
+
+#kable(tab, caption="Participant Age Groups", col.names = NULL)
+```
+
+
+
+
+
+```{r, include=FALSE}
+
+cont<-c("age_at_iview", "bmi", "bmi")
+bin<-c("is_case", "msex", "assist_khat", "khat_3cat","assist_alcohol",
+       "hbp", "assist_tobacco", "tobacco_3cat",
+       "assist_cannabis", "cannabis_3cat",
+       "cidi_q9","obese", "bmi_bin", "hbp", "bpm_bin")
+cat<-c("cidi_q15", "age_group")
+ord<-c("educ_ord")
+set <- c("Set")
+vars<-c(cont, bin, cat, ord, set)
+
+```
+ 
+
+
+```{r, include=F}
+
+tel_all$ltl<-log(tel_all$Exp.ddCt)
+
+tel_all$ltl_exp<- tel_all$Exp.ddCt**2
+
+tel_all$ltl_exp3<- tel_all$Exp.ddCt**3
+tel_all$ltl_sqrt<- tel_all$Exp.ddCt**0.5
+
+
+
+
+
+ggplot(tel_all, aes(sample = ltl_exp)) +
+  geom_qq() +
+  geom_qq_line() +
+  ggtitle("QQ Plot for Exp.ddCt^2")
+
+ggplot(tel_all, aes(sample = ltl_sqrt)) +
+  geom_qq() +
+  geom_qq_line() +
+  ggtitle("QQ Plot for Exp.ddCt^1/2")
+
+
+
+
+qq_ltl <- ggplot(tel_all, aes(sample = ltl)) +
+  geom_qq() +
+  geom_qq_line() +
+  ggtitle("QQ Plot: Log Telomere Length") +
+  xlab("Theoretical Quantile of Log Telomere Length") + 
+  ylab("")  
+  #guides(y = "none")  
+
+
+qq_Exp.ddCt <- ggplot(tel_all, aes(sample = Exp.ddCt)) +
+  geom_qq() +
+  geom_qq_line() +
+  ggtitle("QQ Plot: Telomere Length") +
+  xlab("Theoretical Quantile of Telomere Length") + 
+  ylab("Sample Quantile")
+
+
+
+density_ltl <- tel_all %>%
+  ggplot(aes(x = ltl)) +
+  geom_density(alpha=0.4) + xlab(" Log Telomere Length") + 
+  ggtitle("Log Telomere Length Distribution") +
+  ylab("") + guides(fill=guide_legend(title="Case Status"),
+                    y = "none") 
+
+
+
+
+density_Exp.ddCt <- tel_all %>%
+  ggplot(aes(x = Exp.ddCt)) +
+  geom_density(alpha=0.4) + xlab("Telomere Length") + 
+  ylab("Density") +  ggtitle("Telomere Length Distribution") +
+  guides(fill=guide_legend(title="Case Status")) 
+
+
+
+density_ltl_case <- tel_all %>%
+  ggplot(aes(x = ltl, fill=is_case)) +
+  geom_density(alpha=0.4) + xlab(" Log Telomere Length") + 
+  ggtitle("Log Telomere Length Distribution") +
+  ylab("") + guides(fill=guide_legend(title="Case Status"),
+                    y = "none") + 
+  scale_fill_discrete(name = "Case Status", labels = c("Control", "Case")) 
+
+
+
+density_Exp.ddCt_case <- tel_all %>%
+  ggplot(aes(x = Exp.ddCt, fill=is_case)) +
+  geom_density(alpha=0.4) + xlab("Telomere Length") + 
+  ylab("Density") +  ggtitle("Telomere Length Distribution") +
+  guides(fill=guide_legend(title="Case Status")) +
+   scale_fill_discrete(name = "Case Status", labels = c("Control", "Case"))
+
+
+qq_ggarrange <- ggarrange(qq_Exp.ddCt, qq_ltl, density_Exp.ddCt, density_ltl,
+                common.legend = T, legend="bottom") 
+
+
+
+ggarrange_case <- ggarrange(density_Exp.ddCt_case, density_ltl_case,
+                common.legend = T, legend="bottom") 
+```
+ 
+ 
+
+\pagebreak
+## Analysis
+
+
+
+```{r}
+#LTL appears to be linear associated with Age (p<0.0001)
+fit1<-lm(ltl~Age, data=tel_all)
+fit2<-lm(ltl~Age+ I(Age^2), data=tel_all)
+fit3<-lm(ltl~Age+ I(Age^0.5), data=tel_all)
+fit4<-lm(ltl~Age+ I(Age^2)+I(Age^3), data=tel_all)
+stargazer(fit1, fit2, fit3, fit4, type = "text", 
+          title="Age at interview polynomial associations with LTL")
+
+```
+
+
+
+```{r, include= FALSE}
+cont<-c("age_at_iview", "bmi")
+bin<-c("is_case", "msex", "assist_khat", "khat_3cat","assist_alcohol",
+       "hbp", "assist_tobacco", "tobacco_3cat",
+       "assist_cannabis", "cannabis_3cat",
+       "cidi_q9","obese", "bmi_bin", "hbp", "bpm_bin")
+cat<-c("cidi_q15", "age_group")
+ord<-c("educ_ord")
+set <- c("Set")
+vars<-c(cont, bin, cat, ord, set)
+
+
+tab1<-tableby(~. , data=tel_all[ , c("ltl", vars)])
+kable(summary(tab1))
+
+
+#I don't know why this &nbsp; is here now...
+kable(summary(tab1), booktabs = TRUE, longtable = TRUE,
+  caption = "Prevalence and distributions of variables") %>%
+  kable_styling(latex_options = c("hold_position", "repeat_header"))
+
+
+#kable(summary(tab1), caption="Prevalence and distributions of variables")
+```
+
+
+
+
+```{r, include=FALSE}
+
+# age_results <- lapply(vars, function(var) {
+#   tel_all %>%
+#     group_by(!!sym(var)) %>%
+#     summarize(
+#       Mean = mean(age_at_iview, na.rm = TRUE),
+#       SD = sd(age_at_iview, na.rm = TRUE),
+#       .groups = "drop"
+#     )
+# })
+# 
+# # Display the results
+# names(age_results) <- vars
+# print(age_results)
+
+
+ cont<-c("age_at_iview", "bmi")
+ bin<-c("is_case", "msex", "khat_3cat", "alcohol_3cat",
+ "tobacco_3cat", "cannabis_3cat", "cidi_q9","obese", "bmi_bin", "hbp", "bpm_bin")
+ cat<-c("cidi_q15", "age_group")
+ ord<-c("educ_ord")
+ set <- c("Set")
+ vars_cat <-c(bin, cat, ord, set)
+
+
+result<-data.frame()
+final_df_age<-data.frame()
+
+for (i in vars_cat) {
+  result <- tel_all %>%
+    group_by(!!sym(i)) %>%
+    summarize(
+      Mean = round(mean(age_at_iview, na.rm = TRUE),3),
+      SD = round(sd(age_at_iview, na.rm = TRUE),3)) %>%
+    mutate(Variable = i, Factor = as.character(!!sym(i)))
+  
+  result_df <- as.data.frame(result)
+
+  final_df_age <- bind_rows(final_df_age, as.data.frame(result))
+  
+  final_df_age <- final_df_age %>% select(Variable, Factor,
+                                  Mean, SD) %>%
+    mutate(Factor = if_else(is.na(Factor), "NA/Missing", Factor))
+  
+}
+
+
+kable(final_df_age, booktabs = TRUE, longtable = TRUE,
+  caption = "Mean Age and Distribtion of Variables") %>%
+  kable_styling(latex_options = c("hold_position", "repeat_header"))
+
+#kable(final_df_age, caption="Mean Age and Distribtion of Variables")
+
+```
+
+
+
+```{r, include=FALSE}
+
+result<-data.frame()
+final_df_ltl<-data.frame()
+for (i in vars_cat) {
+  result <- tel_all %>%
+    group_by(!!sym(i)) %>%
+    summarize(
+      Mean = round(mean(ltl, na.rm = TRUE),3),
+      SD = round(sd(ltl, na.rm = TRUE),3)) %>%
+    mutate(Variable = i, Factor = as.character(!!sym(i)))
+  
+  result_df <- as.data.frame(result)
+  final_df_ltl <- bind_rows(final_df_ltl, as.data.frame(result))
+  final_df_ltl <- final_df_ltl %>% select(Variable, Factor,
+                                  Mean, SD) %>%
+    mutate(Factor = if_else(is.na(Factor), "NA/Missing", Factor))
+  
+}
+
+
+
+#kable(final_df_ltl, caption="Mean LTL and Distribtion of Variables")
+
+```
+
+\pagebreak
+## Bivariate Analysis (Unadjusted)
+
+Age was not statistically associated with LTL (p=0.0856)
+
+Case status (p=0.034) and sex (p=0.0012) are associated with LTL. 
+
+Participants who completed College from educ_ord were also significantly
+associated with LTL (p=3e-04)... 
+I'm not sure what to make of this. 
+
+
+The following variables were shown to be associated
+with LTL:
+
+1. Binary
+* msex, p=	0.0012
+* is_case, p=	0.034
+
+2. Ordinal
+* educ_ord
+
+\setlength{\leftskip}{2cm}
+
+Secondary, p=0.1236
+College, p=	3e-04
+
+\setlength{\leftskip}{0pt}
+
+
+```{r}
+results=NULL
+for (ii in 1:length(vars)) {
+  # Create a formula for the linear regression
+  fmla <- as.formula(paste("ltl ~", vars[ii]))
+  
+  # Fit the linear regression model
+  model <- lm(fmla, data = tel_all) 
+  
+  
+  fit<-lm(fmla, data= tel_all)
+  res<-coef(summary(fit))
+  ci<-round(confint(fit),3)
+  
+  if(nrow(res)==2){
+rownames(res)[2]<-vars[ii]
+rownames(ci)[2]<-vars[ii]
+est<-round(coef(fit)[2:length(coef(fit))],3)
+p<-coef(summary(fit))[2:nrow(coef(summary(fit))), "Pr(>|t|)"]
+if(p<=0.05){est<-paste(est, "*", sep="")}
+if(p<=0.001){est<-paste(est, "*", sep="")}
+if(p<=0.0001){est<-paste(est, "*", sep="")}
+ci<-paste(ci[vars[ii],], collapse=", ")
+ci<-paste("(", ci, ")", sep="")
+r2<-round(summary(fit)$adj.r.squared,3)
+p<-round(p, 4)
+p[p<0.0001]<-"<0.001"
+results<-rbind(results, c(vars[ii], est, ci, p, r2))
+  }
+  
+  if(nrow(res)>2){
+varLine<-c(vars[ii], rep("", 3), round(summary(fit)$adj.r.squared,3))
+res<-res[grep(vars[ii], rownames(res)),]
+rownames(res)<-gsub(vars[ii], "", rownames(res))
+est<-round(res[, "Estimate"],3)
+ind<-which(apply(res, 1, function(x) x["Pr(>|t|)"]<0.05))
+est[ind]<-paste(est[ind], "*", sep="")
+ind<-which(apply(res, 1, function(x) x["Pr(>|t|)"]<0.001))
+est[ind]<-paste(est[ind], "*", sep="")
+ind<-which(apply(res, 1, function(x) x["Pr(>|t|)"]<0.0001))
+est[ind]<-paste(est[ind], "*", sep="")
+ci<-ci[grep(vars[ii], rownames(ci)),]
+rownames(ci)<-gsub(vars[ii], "", rownames(ci))
+ci<-apply(ci, 1, function(x) paste(x, collapse=", "))
+ci<-paste("(", ci, ")", sep="")
+p<-res[, "Pr(>|t|)"]
+p<-round(p,4)
+p[which(p<=0.0001)]<-"<0.0001"
+temp<-cbind(rownames(res), est)
+temp<-cbind(temp, ci)
+temp<-cbind(temp, p)
+temp<-cbind(temp, rep("", nrow(res)))
+temp<-rbind(varLine, temp)
+results<-rbind(results, temp)
+22}
+}
+
+rownames(results)<-c(1:nrow(results))
+colnames(results)<-c("Variable", "Beta", "CI", "p", "Adj R2")
+
+kable(results, booktabs = TRUE, longtable = TRUE,
+  caption = "Bivariate associations between phenotypes and LTL") %>%
+  kable_styling(latex_options = c("hold_position", "repeat_header"))
+
+
+#kable(results, caption="Bivariate associations between phenotypes and LTL.")
+```
+
+
+
+
+```{r, include=FALSE}
+
+#All together
+
+lm_model <- lm(ltl ~ Age, data = tel_all)
+rsq <- summary(lm_model)$adj.r.squared
+
+#Get p value
+lmp <- function (modelobject) {
+    if (class(modelobject) != "lm") stop("Not an object of class 'lm' ")
+    f <- summary(modelobject)$fstatistic
+    p <- pf(f[1],f[2],f[3],lower.tail=F)
+    attributes(p) <- NULL
+    return(p)
+}
+
+pval <- lmp(lm_model)
+
+ggplot(aes(x=Age, y=ltl), data=tel_all)+geom_point()+
+  geom_smooth(method="lm")+
+  theme_bw()+
+  xlab("Age")+
+  ylab("LTL") +
+  ylim(-0.8,0.8) +
+  ggtitle("LTL and Age") +
+annotate("text", x = 40, y = 0.7, 
+           label = paste("Adj. R-squared =", round(rsq, 3), 
+                         "; P-value =", round(pval, 3))) +
+  theme(plot.title = element_text(face= "bold", colour= "black"),
+        axis.title.x = element_text(face="bold", colour = "black"),    
+        axis.title.y = element_text( face="bold", colour = "black")) +
+   ggeasy::easy_center_title() 
+
+
+# annotate("text", x = 40, y = 0.7, 
+#            label = paste("R-squared =", round(rsq, 3), "; P-value =", round(pval, 3))) +
+
+#Cases vs controls
+
+rsq_values <- tel_all %>%
+  group_by(is_case) %>%
+  summarize(Rsquared = summary(lm(ltl ~ Age))$r.squared)
+
+
+ggplot(aes(x = Age, y = ltl, color = is_case), data=tel_all) +
+  geom_point() +
+  geom_smooth(method = "lm", aes(group = is_case)) +
+  theme_bw() +
+  xlab("Age at Interview") +
+  ylab("log(telomere length)") +
+  ylim(-0.8,0.8) +
+  ggtitle("Log Telomere Length and Age, By Case") +
+  geom_text_repel(data = rsq_values, 
+      aes(label = paste("R-squared =", round(Rsquared, 3)), x = 30, y = 0.8))
+
+
+#Sex
+
+rsq_values <- tel_all %>%
+  group_by(msex) %>%
+  summarize(Rsquared = summary(lm(ltl ~ Age))$r.squared)
+
+
+ggplot(aes(x = Age, y = ltl, color = msex), data=tel_all) +
+  geom_point() +
+  geom_smooth(method = "lm") +
+  theme_bw() +
+  xlab("Age at Interview") +
+  ylab("log(telomere length)") +
+  ylim(-0.8,0.8) +
+  ggtitle("Log Telomere Length and Age, By Sex") +
+   geom_text_repel(data = rsq_values, 
+      aes(label = paste("R-squared =", round(Rsquared, 3)), x = 30, y = 0.7))
+
+
+#Age Group 
+
+ggplot(aes(x = Age, y = ltl, color = age_group), data=tel_all) +
+  geom_point() +
+  geom_smooth(method = "lm") +
+  theme_bw() +
+  xlab("Age at Interview") +
+  ylab("log(telomere length)") +
+  ylim(-0.8,0.8) +
+  ggtitle("Log Telomere Length and Age")
+
+
+
+#Heartrate
+
+ggplot(aes(x = Age, y = ltl, color = bpm_bin), data=tel_all) +
+  geom_point() +
+  geom_smooth(method = "lm") +
+  theme_bw() +
+  xlab("Age at Interview") +
+  ylab("log(telomere length)") +
+  ylim(-0.8,0.8) +
+  ggtitle("Log Telomere Length and Age, By Heartrate Bin")
+
+#BMI
+
+ggplot(aes(x = Age, y = ltl, color = bmi_bin), data=tel_all) +
+  geom_point() +
+  geom_smooth(method = "lm") +
+  theme_bw() +
+  xlab("Age at Interview") +
+  ylab("log(telomere length)") +
+  ylim(-0.8,0.8) +
+  ggtitle("Log Telomere Length and Age, By BMI")
+
+
+#Education
+
+ggplot(aes(x = Age, y = ltl, color = educ_ord), data=tel_all) +
+  geom_point() +
+  geom_smooth(method = "lm") +
+  theme_bw() +
+  xlab("Age at Interview") +
+  ylab("log(telomere length)") +
+  ylim(-0.8,0.8) +
+  ggtitle("Log Telomere Length and Age, By Education")
+
+
+
+#Set
+
+rsq_values <- tel_all %>%
+  group_by(Set) %>%
+  summarize(Rsquared = summary(lm(ltl ~ Age))$r.squared)
+
+
+ggplot(aes(x = Age, y = ltl, color = Set), data=tel_all) +
+  geom_point() +
+  geom_smooth(method = "lm") +
+  theme_bw() +
+  xlab("Age at Interview") +
+  ylab("log(telomere length)") +
+  ylim(-0.8,0.8) +
+  ggtitle("Log Telomere Length and Age, By Sex") +
+   geom_text_repel(data = rsq_values, 
+      aes(label = paste("R-squared =", round(Rsquared, 3)), x = 30, y = 0.7))
+
+
+
+model <- lm(ltl ~ is_case + age_at_iview, data=tel_all)
+summary(model)
+
+
+
+
+```
+
+
+```{r, include=FALSE}
+
+
+#Case vs control
+
+ggviolin(tel_all, x="is_case", y="ltl", fill="is_case") + 
+  stat_compare_means(method="t.test",
+                     label.y = c(0.8), 
+                     label.x = c(1.4)) + 
+  scale_x_discrete(labels=c("0" = "Control", "1" = "Case")) +
+  theme(axis.title.x=element_blank(),
+        legend.position = "none") + ylab("LTL") +
+  stat_summary(fun = "mean",
+               geom = "crossbar", 
+               #width = 0.5,
+               colour = "black")
+
+
+#Sex
+ggviolin(tel_all, x="msex", y="ltl", fill="msex", 
+          add="jitter") + 
+   stat_compare_means(method="t.test", 
+                     label.y = c(0.8), 
+                     label.x = c(1.4)) 
+
+#Sex by case
+ggboxplot(tel_all, x="msex", y="ltl", 
+          add="jitter", facet.by = "is_case") + 
+  stat_compare_means(method="t.test",
+                     label.y = c(0.6, 0.6, 0.6, 0.6), 
+                     label.x = c(1.2, 1.2, 1.2, 1.2))
+
+#Case by sex
+ggboxplot(tel_all, x="is_case", y="ltl", 
+          add="jitter", facet.by = "msex") + 
+  stat_compare_means(method="t.test",
+                     label.y = c(0.6, 0.6, 0.6, 0.6), 
+                     label.x = c(1.2, 1.2, 1.2, 1.2))
+
+
+#Sex by heart rate bins
+ggboxplot(tel_all, x="msex", y="ltl", 
+          add="jitter", facet.by = "bpm_bin") + 
+  stat_compare_means(method="t.test",
+                     label.y = c(0.6, 0.6, 0.6, 0.6), 
+                     label.x = c(1.2, 1.2, 1.2, 1.2))
+
+#Case control with bpm bin
+
+# ggboxplot(tel_all, x="is_case", y="ltl", 
+#           add="jitter", facet.by = "bpm_bin") + 
+#   stat_compare_means(method="t.test")
+
+
+#Sex by bmi bins
+
+ggboxplot(tel_all, x = "msex", y = "ltl", 
+          add = "jitter", facet.by = "bmi_bin") + 
+  stat_compare_means(method = "t.test", 
+                     label.y = c(0.6, 0.6, 0.6, 0.6), 
+                     label.x = c(1.2, 1.2, 1.2, 1.2))
+
+#Case control with bmi bin
+
+# ggboxplot(tel_all, x="msex", y="ltl", 
+#           add="jitter", facet.by = "bmi_bin") + 
+#   stat_compare_means(method="t.test")
+
+
+
+#Education 
+stat.test <- tel_all %>% t_test(ltl ~ educ_ord)
+stat.test <- stat.test %>% add_xy_position(x = "educ_ord")
+ggboxplot(tel_all, x="educ_ord", y="ltl", fill="educ_ord", 
+          add="jitter") + 
+  stat_pvalue_manual(stat.test, label = "p.adj.signif", tip.length = 0.02,
+                     y.position = c(0.8, 1.2, 1))
+
+
+
+#ros$is_case <- tel_all$is_case
+
+#Sex by heart rate bins
+ggboxplot(tel_all, x="is_case", y="ltl", 
+          add="jitter", facet.by = "Set") + 
+  stat_compare_means(method="t.test",
+                     label.y = c(0.6, 0.6, 0.6, 0.6), 
+                     label.x = c(1.2, 1.2, 1.2, 1.2)) + 
+  # stat_summary(fun=mean, geom="point", shape=20, size=3, color="red", position=position_dodge(0.75)) +
+  # stat_summary(fun=mean, geom="errorbar", position=position_dodge(0.75),
+  #              aes(ymax = ..y.., ymin = ..y..), color="red", width=0.2) +
+  geom_text(stat="summary", fun=mean, aes(label=sprintf("%.2f", ..y..)),
+            vjust=5, position=position_dodge(0.9), 
+            color="red", size=4,  background = "black", face="bold") +
+  ggtitle("Comparisons of Telomere Length Between Sets")
+
+```
+
+
+
+```{r, include=FALSE}
+#1 
+model1 <- lm(ltl ~ Age + is_case, data = tel_all)
+model2 <- lm(ltl ~ Age, data = tel_all)
+
+summary(model1)
+
+summary(model2)
+
+anova(model1, model2)
+
+
+#2
+model1 <- lm(ltl ~ Age + is_case + Age*is_case, data = tel_all)
+model2 <- lm(ltl ~ Age + is_case, data = tel_all)
+summary(model1)
+# summary(model2)
+
+anova(model1, model2) 
+
+
+```
+
+\pagebreak
+# Rosner Batch Correction 
+
+```{r}
+
+################################################################################
+# Rosner batch correction
+################################################################################
+ 
+# Step 1: biomarker = α +Σ[βi(batchi)] + β(covariate1) + β(covariate2) 
+ 
+fit<-lm(ltl~Set, data=tel_all)
+ 
+# Step 2: calculate the average β for batch: avgb=(Σβi)/N                (Note: βN=0)
+ 
+avgb<-mean(coef(fit)[grep("Set", names(coef(fit)))])
+ 
+# Step 3: recalibrate biomarker levelts
+#                      if batch=1 then adj_biomarker=orig_biomarker-(β1-avgb)
+#         if batch=2 then adj_biomarker=orig_biomarker-(β2-avgb)
+#         …
+#         if batch=N then adj_biomarker=orig_biomarker-(βN-avgb) (Note: βN=0)
+
+#### with package
+#install.packages("batchtma")
+
+
+
+ros_df <- tel_all %>% select(is_case, subjid, ltl, Set, Age)
+
+ros <- adjust_batch(
+  data = ros_df,
+  markers = ltl,
+  batch = Set,
+  method = simple
+)
+
+
+
+```
+
+```{r, include=FALSE}
+#1 
+model1 <- lm(ltl ~ Age + msex, data = tel_all)
+model2 <- lm(ltl ~ Age, data = tel_all)
+
+
+summary(model2)
+anova(model1, model2)
+
+confint(model2, level=0.95)
+
+
+#2
+model1 <- lm(ltl ~ Age + msex + Age*msex, data = tel_all)
+model2 <- lm(ltl ~ Age + msex, data = tel_all)
+# summary(model1)
+# summary(model2)
+
+anova(model1, model2) 
+
+
+
+model1 <- lm(ltl ~ Age, data = tel_all)
+summary(model1)
+confint(model1)
+efronRSquared(model1)
+
+model1 <- lm(ltl ~ Age + Set, data = tel_all)
+summary(model1)
+confint(model1, level=0.95)
+efronRSquared(model1)
+
+
+model1 <- lm(ltl ~ Age + is_case, data = tel_all)
+summary(model1)
+confint(model1, level=0.95)
+efronRSquared(model1)
+
+
+model1 <- lm(ltl_adj2 ~ Age , data = ros)
+summary(model1)
+confint(model1, level=0.95)
+efronRSquared(model1)
+
+
+ros$is_case = tel_all$is_case
+model1 <- lm(ltl_adj2 ~ Age + is_case, data = ros)
+summary(model1)
+confint(model1, level=0.95)
+efronRSquared(model1)
+
+```
+
+
+
+```{r, include=FALSE}
+
+#1
+model1 <- lm(ltl ~ is_case + Age + msex, data = tel_all)
+summary(model1)
+
+```
+
+
+```{r, include=FALSE}
+
+
+  
+tel_all$ltl_rosner<-tel_all$ltl
+sets<-unique(tel_all$Set)
+sets<-sets[order(sets)]
+for(ii in 1:length(sets)){
+  beta<-coef(fit)[grep(sets[ii], names(coef(fit)))]
+  if(length(beta)==0){beta<-0} # Set A has a beta of 0
+  print(paste("Beta:",beta))
+  print(paste("Avg:", avgb))
+  diff<-(beta-avgb)
+  print(diff)
+  tel_all[tel_all$Set==sets[ii], "ltl_rosner"]<-tel_all[tel_all$Set==sets[ii], "ltl_rosner"]-diff
+  
+}
+
+beta
+fit3<-lm(ltl_rosner~Age, data=tel_all)
+summary(fit3)
+
+
+
+
+```
+
+
+\pagebreak
+# Multivariate Analysis
+
+After adjusting for age, the following variables were shown to be associated
+with LTL:
+
+1. Binary
+
+* is_case, p=0.0177
+  
+* msex, p=8e-04
+
+3. Ordinal
+
+* educ_ord
+
+\setlength{\leftskip}{2cm}
+
+Secondary, p=0.1119
+
+College	p<0.0001
+
+\setlength{\leftskip}{0pt}
+
+
+```{r}
+
+results=NULL
+vars<-vars[!vars%in%"age_at_iview"]
+
+for(ii in 1:length(vars)){
+  fmla<-as.formula(paste("ltl ~ age_at_iview +", vars[ii]))
+  fit<-lm(fmla, data=tel_all)
+  res<-coef(summary(fit))
+  res<-res[-2, ]
+  ci<-round(confint(fit),3)
+  ci<-ci[-2,]
+  if(nrow(res)==2){
+    rownames(res)[2]<-vars[ii]
+    rownames(ci)[2]<-vars[ii]
+    est<-round(res[2, "Estimate"], 3)
+    p<-res[2, "Pr(>|t|)"]
+    if(p<=0.05){est<-paste(est, "*", sep="")}
+    if(p<=0.001){est<-paste(est, "*", sep="")}
+    if(p<=0.0001){est<-paste(est, "*", sep="")}
+    ci<-paste(ci[vars[ii],], collapse=", ")
+    ci<-paste("(", ci, ")", sep="")
+    r2<-round(summary(fit)$adj.r.squared,3)
+    p<-round(p, 4)
+    p[p<0.0001]<-"<0.001"
+    results<-rbind(results, c(vars[ii], est, ci, p, r2))
+}
+  
+    if(nrow(res)>2){
+      varLine<-c(vars[ii], rep("", 3), round(summary(fit)$adj.r.squared,3))
+      res<-res[grep(vars[ii], rownames(res)),]
+      rownames(res)<-gsub(vars[ii], "", rownames(res))
+      est<-round(res[, "Estimate"],3)
+      ind<-which(apply(res, 1, function(x) x["Pr(>|t|)"]<0.05))
+      est[ind]<-paste(est[ind], "*", sep="")
+      ind<-which(apply(res, 1, function(x) x["Pr(>|t|)"]<0.001))
+      est[ind]<-paste(est[ind], "*", sep="")
+      ind<-which(apply(res, 1, function(x) x["Pr(>|t|)"]<0.0001))
+      est[ind]<-paste(est[ind], "*", sep="")
+      ci<-ci[grep(vars[ii], rownames(ci)),]
+      rownames(ci)<-gsub(vars[ii], "", rownames(ci))
+      24
+      ci<-apply(ci, 1, function(x) paste(x, collapse=", "))
+      ci<-paste("(", ci, ")", sep="")
+      p<-res[, "Pr(>|t|)"]
+      p<-round(p,4)
+      p[which(p<=0.0001)]<-"<0.0001"
+      temp<-cbind(rownames(res), est)
+      temp<-cbind(temp, ci)
+      temp<-cbind(temp, p)
+      temp<-cbind(temp, rep("", nrow(res)))
+      temp<-rbind(varLine, temp)
+  results<-rbind(results, temp)
+    }
+}
+
+rownames(results)<-c(1:nrow(results))
+colnames(results)<-c("Variable", "Beta", "CI", "p", "Adj R2")
+
+kable(results, booktabs = TRUE, longtable = TRUE,
+  caption = "Associations between phenotype and LTL adjusted for age") %>%
+  kable_styling(latex_options = c("hold_position", "repeat_header"))
+
+
+
+```
+
+
+
+
+
+
+```{r, include=FALSE}
+
+
+
+label(tel_all$ltl)  <- "Log Telomere Length"
+label(tel_all$age_at_iview)  <- "Age"
+label(tel_all$msex)  <- "Sex"
+label(tel_all$educ_ord)  <- "Education"
+label(tel_all$is_case)  <- "Case Status"
+label(tel_all$bmi_bin)  <- "BMI"
+label(tel_all$hbp) <- "Blood Pressure"
+
+
+tel_all$is_case_f <- ifelse(tel_all$is_case==1, "Case", "Control")
+
+
+
+tbl1 <- 
+  table1(~ ltl + age_at_iview + msex + educ_ord + Set 
+       | is_case_f, 
+       data=tel_all,
+       overall=c(left="Total"), 
+       caption=("Demographics and Characteristics"),
+       footnote="All Variables Significantly Associated with Telomere Length",
+       #render=rndr,
+      # topclass = "Rtable1-grid Rtable1-shade Rtable1-times"
+)
+tbl1
+
+
+
+tel_all <- tel_all %>% mutate(hbp = 
+                      fct_relevel(hbp, c("Low BP","Normal BP", "High BP")))
+
+tel_all <- tel_all %>% mutate(bmi_bin = 
+                      fct_relevel(bmi_bin, c("Underweight","Normal Weight",
+                                             "Obese", "Morbidly Obese")))
+
+tbl2 <- table1(~ age_at_iview + ltl + is_case + msex + educ_ord +
+         bmi_bin + hbp | Set, data=tel_all, overall=F)
+
+
+tbl2 <- t1flex(tbl1)
+#tbl2 <- bg(tbl1, bg = "white", part = "all")
+tbl2
+
+```
+
+
+```{r, include=FALSE}
+model1 <- lm(ltl_adj2 ~ Age, data=ros)
+summary(model1)
+confint(model1)
+efronRSquared(model1)
+
+
+tel_all_ACE <- tel_all %>% filter(Set %in% c("A","C", "E"))
+tel_all_ACE_ros <- ros %>% filter(Set %in% c("A","C", "E"))
+
+model_ace <- lm(ltl ~ Age, data=tel_all_ACE)
+summary(model_ace)
+
+model_ace_set <- lm(ltl ~ Age + Set, data=tel_all_ACE)
+summary(model_ace_set)
+```
+
+
+```{r, include=FALSE}
+tel_all_BD <- tel_all %>% filter(Set %in% c("B","D"))
+tel_all_BD_ros <- ros %>% filter(Set %in% c("B","D"))
+
+model_bd <- lm(ltl ~ Age, data=tel_all_BD)
+summary(model_bd)
+
+model_bd_set <- lm(ltl ~ Age + Set, data=tel_all_BD)
+summary(model_bd_set)
+
+
+model_bd_ros <- lm(ltl_adj2 ~ Age, data=tel_all_BD_ros)
+summary(model_bd_ros)
+confint(model_bd_ros)
+efronRSquared(model_bd_ros)
+
+
+
+model1 <- lm(ltl_adj2 ~ Age, data=tel_all_ACE_ros)
+summary(model1)
+confint(model1)
+efronRSquared(model1)
+
+
+#ROSNER BATCH CORRECTION
+
+model_ace_ros <- lm(ltl_adj2 ~ Age + is_case, data=tel_all_ACE_ros)
+summary(model_ace_ros)
+
+```
+
+
+```{r, include=FALSE}
+
+model1_iscase <- lm(ltl ~ Age + factor(is_case), data=tel_all)
+summary(model1_iscase)
+confint(model1_iscase)
+
+model_ros_iscase <- lm(ltl_adj2 ~ Age + factor(is_case), data=ros)
+summary(model_ros_iscase)
+confint(model_ros_iscase)
+```
+
+```{r, include=FALSE}
+
+ggplot(tel_all, aes(x=pcl_score_lifetime, group = is_case, fill=is_case))+
+  facet_wrap(~msex) + 
+  geom_density(alpha=0.4)
+
+
+```
+
+
+
+```{r, echo=FALSE, include=FALSE, results='asis'}
+
+#Deal with missingness 
+
+cidi_list <-    c("cidi_q1","cidi_q2", "cidi_q3", "cidi_q4",
+                 "cidi_q5", "cidi_q6", "cidi_q7", 
+                 "cidi_q8", "cidi_q9", "cidi_q10", "cidi_q11", 
+                 "cidi_q12", "cidi_q13", "cidi_q14", "cidi_q15", 
+                 "cidi_q16","cidi_q17")
+
+  tel_all <- tel_all %>%
+    mutate(across(all_of(cidi_list),
+                  ~ case_when(
+                    . == 1 ~ 1,
+                    . == 0 ~ 0,
+                    . == 777 | is.na(.) ~ 777,
+                    TRUE ~ as.numeric(.)
+                  ))) %>%
+  mutate(across(all_of(cidi_list), factor))
+  
+  
+
+  
+tel_all$is_case_f <- ifelse(tel_all$is_case==1, "Case", "Control")
+
+health_vars <- c("bmi_bin", 
+                 
+                 "alcohol_3cat", "cannabis_3cat", "tobacco_3cat","khat_3cat",
+                 
+                 "cidi_q1","cidi_q2", "cidi_q3", "cidi_q4",
+                 "cidi_q5", "cidi_q6", "cidi_q7", 
+                 "cidi_q8", "cidi_q9", "cidi_q10", "cidi_q11", 
+                 "cidi_q12", "cidi_q13", "cidi_q14", "cidi_q15", 
+                 "cidi_q16","cidi_q17" )
+
+health_vars_name <- c("BMI Cat", 
+                      "Alcohol", "Cannabis", "Tobacco", "Khat",
+                      "Arthritis or rheumatism", "Chronic neck or back problems",
+                      "Frequent/Severe Headaches", "Any other chronic pain", 
+                      "Seanal allergies", 
+                      "Stroke", "Heart Attack",
+                      "Heart Disease", "High Blood Pressure", 
+                      "Asthma", "Tuberculosis", 
+                      "Any other chronic lung disease",
+                      "Diabetes/High Blood Sugar", 
+                      "An ulcer in your stomach or intestine",
+                      "HIV/AIDS", "Epilepsy or seizures",
+                      "Cancer")
+
+tables <- list()
+
+for (var in health_vars) {
+  tbl <- tel_all %>%
+    select(.data[[var]], is_case_f) %>%
+    table(useNA = "always") 
+
+
+  
+  tbl <- tbl %>%
+    kable(
+      caption = paste(health_vars_name[match(var, health_vars)], "and Case Status"),
+      format = "markdown",
+      escape = FALSE
+    ) %>%
+    kable_styling(full_width = FALSE, html_font = "Cambria", position = "left", font_size = 15)
+
+  print(tbl)
+}
+
+
+
+```
+\pagebreak
+## Tables 
+### Case Status
+
+```{r}
+label(tel_all$bmi_bin)  <- "BMI"
+label(tel_all$alcohol_3cat)  <- "Alcohol Use"
+label(tel_all$khat_3cat)  <- "Khat Use"
+label(tel_all$cannabis_3cat)  <- "Cannabis Use"
+label(tel_all$tobacco_3cat)  <- "Tobacco Use"
+label(tel_all$cidi_q1)  <- "Arthritis and Rheumatism"
+label(tel_all$cidi_q2)  <- "Chronic back or neck problems"
+label(tel_all$cidi_q3)  <- "Frequent or severe headaches"
+label(tel_all$cidi_q4)  <- "Any other chronic pain"
+label(tel_all$cidi_q5)  <- "Seasonal allergies"
+label(tel_all$cidi_q6)  <- "Stroke"
+label(tel_all$cidi_q7)  <- "Heart attack"
+label(tel_all$cidi_q8)  <- "Heart disease"
+label(tel_all$cidi_q9)  <- "High blood pressure"
+label(tel_all$cidi_q10)  <- "Asthma"
+label(tel_all$cidi_q11)  <- "Tuberculosis"
+label(tel_all$cidi_q12)  <- "Other chronic lung disease"
+label(tel_all$cidi_q13)  <- "Diabetes"
+label(tel_all$cidi_q14)  <- "Stomach or intestine"
+label(tel_all$cidi_q15)  <- "HIV/AIDS"
+label(tel_all$cidi_q16)  <- "Epilepsy/Seizure"
+label(tel_all$cidi_q17)  <- "Cancer"
+
+
+tbl <- table1(~ age_at_iview + msex + educ_ord + 
+                 bmi_bin + alcohol_3cat + khat_3cat + cannabis_3cat + tobacco_3cat + 
+                cidi_q1 + cidi_q2 + cidi_q3 + cidi_q4 + cidi_q5 + cidi_q6 +
+                cidi_q7 + cidi_q8  + cidi_q9 + cidi_q10 + cidi_q11 + cidi_q12 +
+               cidi_q13 + cidi_q14 + cidi_q15 + cidi_q16 + cidi_q17 | is_case_f, data=tel_all, overall=F)
+
+tbl <- t1flex(tbl)
+```
+
+\pagebreak
+```{r}
+tbl
+```
+
+\pagebreak
+### Set
+```{r}
+tbl <- table1(~ age_at_iview + msex + educ_ord + 
+                 bmi_bin + alcohol_3cat + khat_3cat + cannabis_3cat + tobacco_3cat + 
+                cidi_q1 + cidi_q2 + cidi_q3 + cidi_q4 + cidi_q5 + cidi_q6 +
+                cidi_q7 + cidi_q8  + cidi_q9 + cidi_q10 + cidi_q11 + cidi_q12 +
+               cidi_q13 + cidi_q14 + cidi_q15 + cidi_q16 + 
+                cidi_q17 | Set, data=tel_all, overall=F)
+
+tbl <- t1flex(tbl)
+```
+
+\pagebreak
+```{r}
+tbl
+
+```
+
+
+```{r, echo=FALSE, include=F, results='asis'}
+
+tables <- list()
+
+for (var in health_vars) {
+  tbl <- tel_all %>%
+    select(.data[[var]], Set) %>%
+    table(useNA = "always")
+
+  tbl <- tbl %>%
+    kable(
+      caption = paste(health_vars_name[match(var, health_vars)], "and Set"),
+      format = "markdown",
+      escape = FALSE
+    ) %>%
+    kable_styling(full_width = FALSE, html_font = "Cambria", position = "left", font_size = 15)
+
+
+  print(tbl)
+
+}
+
+
+
+```
+
+
+\pagebreak
+# Propensity score analysis
+
+**Predicting case status** 
+
+```{r, warning=FALSE}
+glm_fit <- glm(factor(is_case) ~ age_at_iview + factor(msex) + educ_ord + 
+                 bmi_bin + alcohol_3cat + khat_3cat + cannabis_3cat + tobacco_3cat + 
+                cidi_q1 + cidi_q2 + cidi_q3 + cidi_q4 + cidi_q5 + cidi_q6 +
+                cidi_q7 + cidi_q8  + cidi_q9 + cidi_q10 + cidi_q11 + cidi_q12 +
+               cidi_q13 + cidi_q14 + cidi_q15 + cidi_q16 + cidi_q17,
+               
+               data=tel_all, 
+               family="binomial")
+
+
+glm_probs = data.frame(probs = predict(glm_fit, type="response"), tel_all$is_case_f)
+glm_probs$is_case <- tel_all$is_case
+
+res <- as.data.frame(coef(summary(glm_fit)))
+
+
+res <- res %>% mutate(ci_ll = round(exp(Estimate - qnorm(0.975)*`Std. Error`),3))
+res <- res %>% mutate(ci_ul = round(exp(Estimate + qnorm(0.975)*`Std. Error`),3))
+res <- res %>% mutate(ci = paste0("(",ci_ll,",",ci_ul,")"))
+
+res <- res %>% mutate(OR = exp(Estimate)) %>%
+  mutate(OR_round = case_when(
+    OR < 100 ~ sprintf("%.2f", OR),
+    OR>100 ~ "Error"))
+
+res <- res %>% mutate(pval = round(`Pr(>|z|)`,3)) %>%
+  mutate(pval2 = case_when(
+    pval<0.001 ~       paste0(pval,"***"),
+    pval<0.01 & pval>0 ~ paste0(pval,"**"),
+    pval<0.05 & pval>0 ~ paste0(pval,"*"),
+    TRUE ~ as.character(pval)
+  )) 
+
+
+res <- res %>% select(OR_round, ci, pval2) 
+
+
+rownames(res) <- c("Intercept", "Age", "Female",
+                   "Education - Secondary", "Education - College",
+                   "BMI - Underweight", "BMI- Overweight", "BMI - Obese",
+                   "Alcohol - Irregular", "Alcohol - Regular",
+                   "Khat - Irregular", "Khat - Regular",
+                   "Cannabis - Irregular", "Cannabis - Regular",
+                   "Tobacco - Irregular", "Tobacco - Regular",
+                   "Arthritis - Yes","Arthritis - Missing",
+                   "Chronic back/neck problems - Yes",
+                   "Chronic back/neck problems - Missing",
+                   "Headaches - Yes","Headaches - Missing",
+                   "Other chronic pain - Yes", 
+                   "Allergies - Yes", 
+                   "Stroke - Yes", "Stroke - Missing",
+                   "Heart attack - Yes", "Heart Attack - Missing",
+                   "Heart disease - Yes", "Heart Disase - Missing",
+                   "High blood pressure - Yes", "High blood pressure - Missing",
+                   "Asthma - Yes", "Asthma - Missing",
+                   "Tuberculosis - Yes", "Tuberculosis - Missing",
+                   "Other chronic lung disease - Yes",
+                   "Other chronic lung disease - Missing",
+                   "Diabetes - Yes", "Diabetes - Missing",
+                   "Ulcer - Yes", "Ulcer - Missing",
+                   "HIV/AIDS - Yes", "HIV/AIDS - Missing",
+                   "Epilepsy/Seizure - Yes",
+                   "Cancer - Missing")
+```
+
+
+\pagebreak
+```{r, warning=FALSE}
+kable(res, col.names = c("Coefficient", "OR", "95% CI", "p-value"),
+            caption="Propensity Score Ananlysis predicting case status") %>%
+  kable_classic(full_width = F) %>% add_footnote(paste("Psuedo R2 = ", efronRSquared(glm_fit)))
+```
+
+\pagebreak
+```{r, warning=FALSE}
+ggplot(data=glm_probs, aes(x=probs, fill=tel_all.is_case_f)) + 
+  geom_histogram(position="dodge") + 
+  ggtitle("Probabilities predicting Case Status") +
+  xlab("Probabilities") + 
+  ylab("Count") +
+  guides(fill = guide_legend(title = "Case Status")) +
+  theme_bw()
+
+
+
+```
+
+
+\pagebreak
+
+**Propensity score analysis for set**
+```{r, warning=FALSE}
+#With chronic conditions
+#Missingness in cidi_q9 and cidi_q13
+
+glm_fit <- glm(factor(Set) ~ age_at_iview + factor(msex) + educ_ord + 
+                 bmi_bin + alcohol_3cat + khat_3cat + cannabis_3cat + tobacco_3cat + 
+                cidi_q1 + cidi_q2 + cidi_q3 + cidi_q4 + cidi_q5 + cidi_q6 +
+                cidi_q7 + cidi_q8  + cidi_q9 + cidi_q10 + cidi_q11 + cidi_q12 +
+               cidi_q13 + cidi_q14 + cidi_q15 + cidi_q16 + cidi_q17, data=tel_all, 
+               family="binomial")
+
+glm_probs = data.frame(probs = predict(glm_fit, type="response"), tel_all$Set,
+                       tel_all$is_case_f)
+
+
+res <- as.data.frame(coef(summary(glm_fit)))
+
+
+res <- res %>% mutate(ci_ll = round(exp(Estimate - qnorm(0.975)*`Std. Error`),3))
+res <- res %>% mutate(ci_ul = round(exp(Estimate + qnorm(0.975)*`Std. Error`),3))
+res <- res %>% mutate(ci = paste0("(",ci_ll,",",ci_ul,")"))
+
+res <- res %>% mutate(OR = exp(Estimate)) %>%
+  mutate(OR_round = case_when(
+    OR < 100 ~ sprintf("%.2f", OR),
+    OR>100 ~ "Error"))
+
+res <- res %>% mutate(pval = round(`Pr(>|z|)`,3)) %>%
+  mutate(pval2 = case_when(
+    pval<0.001         ~ paste0(pval,"***"),
+    pval<0.01 & pval>0 ~ paste0(pval,"**"),
+    pval<0.05 & pval>0 ~ paste0(pval,"*"),
+    TRUE ~ as.character(pval)
+  ))
+
+
+res <- res %>% select(OR_round, ci, pval2) 
+
+
+rownames(res) <- c("Intercept", "Age", "Female",
+                   "Education - Secondary", "Education - College",
+                   "BMI - Underweight", "BMI- Overweight", "BMI - Obese",
+                   "Alcohol - Irregular", "Alcohol - Regular",
+                   "Khat - Irregular", "Khat - Regular",
+                   "Cannabis - Irregular", "Cannabis - Regular",
+                   "Tobacco - Irregular", "Tobacco - Regular",
+                   "Arthritis - Yes","Arthritis - Missing",
+                   "Chronic back/neck problems - Yes",
+                   "Chronic back/neck problems - Missing",
+                   "Headaches - Yes","Headaches - Missing",
+                   "Other chronic pain - Yes", 
+                   "Allergies - Yes", 
+                   "Stroke - Yes", "Stroke - Missing",
+                   "Heart attack - Yes", "Heart Attack - Missing",
+                   "Heart disease - Yes", "Heart Disase - Missing",
+                   "High blood pressure - Yes", "High blood pressure - Missing",
+                   "Asthma - Yes", "Asthma - Missing",
+                   "Tuberculosis - Yes", "Tuberculosis - Missing",
+                   "Other chronic lung disease - Yes",
+                   "Other chronic lung disease - Missing",
+                   "Diabetes - Yes", "Diabetes - Missing",
+                   "Ulcer - Yes", "Ulcer - Missing",
+                   "HIV/AIDS - Yes", "HIV/AIDS - Missing",
+                   "Epilepsy/Seizure - Yes",
+                   "Cancer - Missing")
+```
+
+\pagebreak
+```{r, warning=FALSE}
+kable(res, col.names = c("Coefficient", "OR", "95% CI", "p-value"),
+      caption="Propensity Score Ananlysis predicting set") %>%
+  kable_classic(full_width = F) %>% add_footnote(paste("Psuedo R2 = ", efronRSquared(glm_fit)))
+```
+
+\pagebreak
+```{r, warning=FALSE}
+ggplot(data=glm_probs, aes(x=probs, fill=tel_all.Set)) + geom_histogram(position="dodge") +
+facet_wrap(~tel_all.is_case_f) + ggtitle("Probabilities predicting Set") +
+  xlab("Probabilities") + 
+  ylab("Count") +
+  guides(fill = guide_legend(title = "Set")) +
+  theme_bw()
+
+
+
+```
