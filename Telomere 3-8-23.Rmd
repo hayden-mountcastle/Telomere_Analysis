@@ -1,0 +1,183 @@
+---
+title: "Telomere 3-8-23"
+author: "Hayden Mountcastle"
+date: "2024-03-07"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r error=FALSE, message=FALSE, warning=FALSE, results='hide'}
+library(tidyverse)
+library(knitr)
+library(batchtma)
+library(ggplot2)
+library(stargazer)
+library(tableone)
+library(arsenal)
+library(ggpubr)
+library(rstatix)
+library(broom)
+library(ggrepel)
+library(knitr)
+library(kableExtra)
+library(gtsummary)
+library(table1)
+library(flextable)
+library(janitor)
+library(table1)
+library(ggeasy)
+library(rcompanion)
+library(nnet)
+
+#devtools::install_github("thomasp85/patchwork")
+library(patchwork)
+```
+
+
+How many people do we lose excluding CIDI variables + Substance abuse
+(Excluding HIV and cancer)
+```{r, warning=FALSE}
+
+tel_all %>% filter(cidi_q1 %in% c(777) | 
+                  cidi_q2 %in% c(777) |
+                    cidi_q3 %in% c(777) |
+                    cidi_q4 %in% c(777) |
+                    cidi_q5 %in% c(777) |
+                    cidi_q6 %in% c(777) |
+                    cidi_q7 %in% c(777) |
+                    cidi_q8 %in% c(777) |
+                    cidi_q9 %in% c(777) |
+                    cidi_q10 %in% c(777) |
+                    cidi_q11 %in% c(777) |
+                    cidi_q12 %in% c(777) |
+                    cidi_q13 %in% c(777) |
+                    cidi_q14 %in% c(777) |
+                    cidi_q16 %in% c(777) 
+                    ) %>% summarise(`Count with missing` = n())
+
+
+```
+Filter these 26 these people from analysis.
+```{r, warning=FALSE }
+
+
+tel_all_nomissing <- tel_all %>% filter(!(cidi_q1 %in% c(777) | 
+                     cidi_q2 %in% c(777) |
+                     cidi_q3 %in% c(777) |
+                     cidi_q4 %in% c(777) |
+                     cidi_q5 %in% c(777) |
+                     cidi_q6 %in% c(777) |
+                     cidi_q7 %in% c(777) |
+                     cidi_q8 %in% c(777) |
+                     cidi_q9 %in% c(777) |
+                     cidi_q10 %in% c(777) |
+                     cidi_q11 %in% c(777) |
+                     cidi_q12 %in% c(777) |
+                     cidi_q13 %in% c(777) |
+                     cidi_q14 %in% c(777) |
+                     #Skip cidi_q15, HIV
+                     cidi_q16 %in% c(777) 
+                    #Skip cidi_q17, Cancer
+                    ))
+
+
+
+
+```
+
+Make new rosner batch corrected dataframe
+```{r, warning=FALSE }
+
+ros <- adjust_batch(
+  data = tel_all_nomissing,
+  markers = ltl,
+  batch = Set,
+  method = simple
+)
+
+```
+
+```{r}
+
+tbl <- table1(~ age_at_iview + msex + educ_ord + 
+                 bmi_bin + alcohol_3cat + khat_3cat + cannabis_3cat + 
+                tobacco_3cat + 
+                cidi_q1 + cidi_q2 + cidi_q3 + cidi_q4 + cidi_q5 + cidi_q6 +
+                cidi_q7 + cidi_q8  + cidi_q9 + cidi_q10 + cidi_q11 + cidi_q12 +
+               cidi_q13 + cidi_q14 + cidi_q15 + 
+                cidi_q16 + cidi_q17 | is_case_clean,
+              data=tel_all_nomissing, overall=F)
+
+
+
+tbl <- t1flex(tbl) 
+tbl
+
+
+```
+
+
+4 models: — ALL ROSNER
+	1. Lm(Rosner LTL ~ age + case status (clean/unclean)
+ 	2. Lm(Rosner LTL ~ age + case status (clean/unclean) + sex
+	3. Age case sex education 
+	4. Age case sex dmi education khat use, etc.
+	
+Model 1
+```{r, warning=FALSE }
+
+model <-  lm(ltl_adj2 ~ age_at_iview + is_case_clean, ros)
+#summary(model)
+
+tbl_regression(model) %>% add_significance_stars(
+    hide_p = FALSE, hide_ci = FALSE,
+    pattern = "{p.value}{stars}"
+  )
+```
+
+Model 2
+```{r, warning=FALSE }
+
+model <-  lm(ltl_adj2 ~ age_at_iview + is_case_clean + msex, ros)
+#summary(model)
+
+
+tbl_regression(model) %>% add_significance_stars(
+    hide_p = FALSE, hide_ci = FALSE,
+    pattern = "{p.value}{stars}"
+  )
+```
+
+```{r, warning=FALSE }
+
+model <-  lm(ltl_adj2 ~ age_at_iview + is_case_clean + msex +
+               educ_ord, ros)
+
+tbl_regression(model) %>% add_significance_stars(
+    hide_p = FALSE, hide_ci = FALSE,
+    pattern = "{p.value}{stars}"
+  )
+
+```
+```{r, warning=FALSE }
+
+model <-  lm(ltl_adj2 ~ age_at_iview + is_case_clean + msex +
+               educ_ord + khat_3cat + alcohol_3cat + cannabis_3cat + 
+               alcohol_3cat + tobacco_3cat + 
+               cidi_q1 + cidi_q2 + cidi_q3 + cidi_q4 + cidi_q5 + cidi_q6 +
+               cidi_q7 + cidi_q8 + cidi_q9 + cidi_q10 + cidi_q11 +
+               cidi_q12 + cidi_q13 + cidi_q14 + cidi_q15 + cidi_q16 +
+               cidi_q17, ros)
+
+tbl_regression(model) %>% add_significance_stars(
+    hide_p = FALSE, hide_ci = FALSE,
+    pattern = "{p.value}{stars}"
+  )
+
+```
